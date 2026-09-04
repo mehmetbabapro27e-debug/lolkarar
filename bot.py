@@ -6,13 +6,6 @@ from discord import app_commands
 from discord.ui import Select, View, Button
 import random
 
-# 🔴 KENDİ OYUNCU LİSTENİ BURAYA YAZ (İstediğin kadar değiştir)
-OYUNCU_LISTESI = [
-    "Ahmet", "Mehmet", "Ayşe", "Fatma", "Ali",
-    "Veli", "Selim", "Can", "Eda", "Leyla",
-    "Mert", "Deniz", "Zeynep", "Efe", "Berra"
-]
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -44,9 +37,8 @@ class ModSelect(Select):
         secilen_mod = self.values[0]
         kisi_sayisi = int(secilen_mod[0]) * 2
 
-        # 🔥 ZAMAN AŞIMINI KALDIR (15 dakika boyunca açık kalır)
         view = View(timeout=None)
-        player_select = PlayerSelect(kisi_sayisi, secilen_mod)
+        player_select = PlayerSelect(kisi_sayisi, secilen_mod, interaction.guild)
         view.add_item(player_select)
 
         onay_butonu = Button(label="✅ Takım Oluştur!", style=discord.ButtonStyle.green)
@@ -54,18 +46,26 @@ class ModSelect(Select):
 
         view.kisi_sayisi = kisi_sayisi
         view.secilen_mod = secilen_mod
-        view.oyuncu_listesi = OYUNCU_LISTESI
 
         async def buton_callback(interaction_buton: discord.Interaction):
-            secilenler = player_select.values
-            if not secilenler:
+            secilen_idler = player_select.values
+            # ID'leri isimlere çevir
+            secilen_isimler = []
+            for uid in secilen_idler:
+                member = interaction.guild.get_member(int(uid))
+                if member:
+                    secilen_isimler.append(member.display_name)
+                else:
+                    secilen_isimler.append(uid)
+
+            if not secilen_isimler:
                 await interaction_buton.response.send_message("❌ Hiç oyuncu seçmedin!", ephemeral=True)
                 return
-            if len(secilenler) != view.kisi_sayisi:
-                await interaction_buton.response.send_message(f"❌ {view.kisi_sayisi} kişi seçmelisin! Sen {len(secilenler)} kişi seçtin.", ephemeral=True)
+            if len(secilen_isimler) != view.kisi_sayisi:
+                await interaction_buton.response.send_message(f"❌ {view.kisi_sayisi} kişi seçmelisin! Sen {len(secilen_isimler)} kişi seçtin.", ephemeral=True)
                 return
 
-            rastgele_liste = secilenler.copy()
+            rastgele_liste = secilen_isimler.copy()
             random.shuffle(rastgele_liste)
             yari = len(rastgele_liste) // 2
             takim1 = rastgele_liste[:yari]
@@ -85,12 +85,18 @@ class ModSelect(Select):
             view=view
         )
 
-# ------------------- OYUNCU SEÇME MENÜSÜ -------------------
+# ------------------- OYUNCU SEÇME MENÜSÜ (Sunucudan Alır) -------------------
 class PlayerSelect(Select):
-    def __init__(self, kisi_sayisi, mod_adi):
+    def __init__(self, kisi_sayisi, mod_adi, guild):
         options = []
-        for isim in OYUNCU_LISTESI:
-            options.append(discord.SelectOption(label=isim, value=isim))
+        for member in guild.members:
+            if not member.bot:
+                options.append(discord.SelectOption(
+                    label=member.display_name,
+                    value=str(member.id)
+                ))
+        # Discord max 25 seçenek gösterir, ilk 25'ini al
+        options = options[:25]
         super().__init__(
             placeholder=f"{kisi_sayisi} oyuncu seç...",
             min_values=1,
@@ -104,12 +110,11 @@ class PlayerSelect(Select):
 # ------------------- ANA KOMUT /belirle -------------------
 @bot.tree.command(name="belirle", description="LOL takım oluşturma aracı")
 async def belirle(interaction: discord.Interaction):
-    # 🔥 ZAMAN AŞIMINI KALDIR (15 dakika boyunca açık kalır)
     view = View(timeout=None)
     view.add_item(ModSelect())
     await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
 
-# ------------------- RENDER'IN "LIVE" GÖRMESİ İÇİN WEB SUNUCUSU -------------------
+# ------------------- RENDER WEB SUNUCUSU -------------------
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
