@@ -1,3 +1,5 @@
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 import discord
 from discord import app_commands
@@ -106,4 +108,21 @@ async def belirle(interaction: discord.Interaction):
     await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
 
 # ------------------- BOTU ÇALIŞTIR -------------------
+# ... (diğer kodlar burada)
+
+# Render'ın "Live" görmesi için basit bir web sunucusu
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+
+def run_web():
+    server = HTTPServer(('0.0.0.0', 10000), Handler)
+    server.serve_forever()
+
+threading.Thread(target=run_web, daemon=True).start()
+
+# ------------------- BOTU ÇALIŞTIR -------------------
 bot.run(os.getenv("BOT_TOKEN"))
+
