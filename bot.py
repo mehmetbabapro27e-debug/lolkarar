@@ -1,3 +1,4 @@
+import os
 import discord
 from discord import app_commands
 from discord.ui import Select, View, Button
@@ -105,4 +106,4 @@ async def belirle(interaction: discord.Interaction):
     await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
 
 # ------------------- BOTU ÇALIŞTIR -------------------
-bot.run("MTU0NTUxODcyNDk5ODYzMTQyNA.GHd55o.-VEtrqKo-2c804BNyfj0k05aIow6hFaCz-sn5c")
+bot.run(os.getenv("BOT_TOKEN"))
