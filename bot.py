@@ -1,10 +1,12 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
+import math
+import random
+
 import discord
 from discord import app_commands
-from discord.ui import Select, View, Button
-import random
+from discord.ui import Select, View, Button, Modal, TextInput
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -20,6 +22,224 @@ class MyBot(discord.Client):
         print("Komutlar senkronize edildi!")
 
 bot = MyBot()
+
+PAGE_SIZE = 25  # Discord bir select menüde en fazla 25 seçenek gösterebiliyor
+
+
+# ------------------- ARAMA MODALI -------------------
+class SearchModal(Modal, title="Oyuncu Ara"):
+    arama = TextInput(
+        label="İsim ara",
+        placeholder="Örn: alpha",
+        required=False,
+        max_length=50,
+    )
+
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__()
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        query = self.arama.value.strip().lower()
+        self.parent_view.search_query = query
+
+        if query:
+            self.parent_view.filtered_members = [
+                m for m in self.parent_view.all_members
+                if query in m.display_name.lower()
+            ]
+        else:
+            self.parent_view.filtered_members = self.parent_view.all_members
+
+        self.parent_view.current_page = 0
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(
+            content=self.parent_view.build_content(),
+            view=self.parent_view,
+        )
+
+
+# ------------------- OYUNCU SEÇME MENÜSÜ (SAYFALI) -------------------
+class PlayerSelect(Select):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        page_members = parent_view.get_page_members()
+
+        options = []
+        for member in page_members:
+            options.append(discord.SelectOption(
+                label=member.display_name,
+                value=str(member.id),
+                default=str(member.id) in parent_view.selected_ids,
+            ))
+
+        if not options:
+            options = [discord.SelectOption(label="Bu sayfada/aramada oyuncu yok", value="none")]
+
+        super().__init__(
+            placeholder=f"Oyuncu seç... (Sayfa {parent_view.current_page + 1}/{parent_view.total_pages()})",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+        )
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        # Bu sayfada gösterilen eski seçimleri sil, yerine yeni seçilenleri ekle.
+        # (Diğer sayfalardaki seçimler selected_ids içinde dokunulmadan kalır.)
+        page_ids = {opt.value for opt in self.options if opt.value != "none"}
+        self.parent_view.selected_ids -= page_ids
+        for val in self.values:
+            if val != "none":
+                self.parent_view.selected_ids.add(val)
+
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(
+            content=self.parent_view.build_content(),
+            view=self.parent_view,
+        )
+
+
+# ------------------- ARAMA / SAYFALAMA / ONAY BUTONLARI -------------------
+class SearchButton(Button):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__(label="🔍 Ara", style=discord.ButtonStyle.secondary, row=1)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(SearchModal(self.parent_view))
+
+
+class ClearSearchButton(Button):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__(label="✖️ Aramayı Temizle", style=discord.ButtonStyle.secondary, row=1)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.search_query = ""
+        self.parent_view.filtered_members = self.parent_view.all_members
+        self.parent_view.current_page = 0
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(
+            content=self.parent_view.build_content(),
+            view=self.parent_view,
+        )
+
+
+class PrevPageButton(Button):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__(label="⬅️ Önceki Sayfa", style=discord.ButtonStyle.primary, row=2)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent_view.current_page > 0:
+            self.parent_view.current_page -= 1
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(
+            content=self.parent_view.build_content(),
+            view=self.parent_view,
+        )
+
+
+class NextPageButton(Button):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__(label="Sonraki Sayfa ➡️", style=discord.ButtonStyle.primary, row=2)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent_view.current_page < self.parent_view.total_pages() - 1:
+            self.parent_view.current_page += 1
+        self.parent_view.rebuild()
+        await interaction.response.edit_message(
+            content=self.parent_view.build_content(),
+            view=self.parent_view,
+        )
+
+
+class ConfirmButton(Button):
+    def __init__(self, parent_view: "TeamBuilderView"):
+        super().__init__(label="✅ Takım Oluştur!", style=discord.ButtonStyle.green, row=3)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.parent_view
+        secilen_idler = list(view.selected_ids)
+
+        secilen_isimler = []
+        for uid in secilen_idler:
+            member = view.guild.get_member(int(uid))
+            if member:
+                secilen_isimler.append(member.display_name)
+            else:
+                secilen_isimler.append(uid)
+
+        if not secilen_isimler:
+            await interaction.response.send_message("❌ Hiç oyuncu seçmedin!", ephemeral=True)
+            return
+        if len(secilen_isimler) != view.kisi_sayisi:
+            await interaction.response.send_message(
+                f"❌ {view.kisi_sayisi} kişi seçmelisin! Sen {len(secilen_isimler)} kişi seçtin.",
+                ephemeral=True,
+            )
+            return
+
+        rastgele_liste = secilen_isimler.copy()
+        random.shuffle(rastgele_liste)
+        yari = len(rastgele_liste) // 2
+        takim1 = rastgele_liste[:yari]
+        takim2 = rastgele_liste[yari:]
+
+        embed = discord.Embed(title=f"🎮 {view.secilen_mod} Takımlar Oluştu!", color=discord.Color.blue())
+        embed.add_field(name="🟦 Takım 1", value="\n".join(takim1) if takim1 else "Boş", inline=True)
+        embed.add_field(name="🟥 Takım 2", value="\n".join(takim2) if takim2 else "Boş", inline=True)
+        embed.set_footer(text="İyi oyunlar! 🎯")
+
+        await interaction.response.edit_message(content="", embed=embed, view=None)
+
+
+# ------------------- ANA SAYFALI SEÇİM VIEW'İ -------------------
+class TeamBuilderView(View):
+    def __init__(self, kisi_sayisi, mod_adi, guild):
+        super().__init__(timeout=None)
+        self.kisi_sayisi = kisi_sayisi
+        self.secilen_mod = mod_adi
+        self.guild = guild
+
+        self.all_members = [m for m in guild.members if not m.bot]
+        self.filtered_members = self.all_members
+        self.search_query = ""
+        self.current_page = 0
+        self.selected_ids = set()
+
+        self.rebuild()
+
+    def total_pages(self):
+        return max(1, math.ceil(len(self.filtered_members) / PAGE_SIZE))
+
+    def get_page_members(self):
+        start = self.current_page * PAGE_SIZE
+        end = start + PAGE_SIZE
+        return self.filtered_members[start:end]
+
+    def build_content(self):
+        arama_bilgisi = f" | 🔍 Arama: **{self.search_query}**" if self.search_query else ""
+        return (
+            f"**{self.secilen_mod}** seçtin. Lütfen tam **{self.kisi_sayisi}** oyuncu seç ve "
+            f"'Takım Oluştur' butonuna bas.\n"
+            f"Sayfa **{self.current_page + 1}/{self.total_pages()}** | "
+            f"Seçili: **{len(self.selected_ids)}/{self.kisi_sayisi}**{arama_bilgisi}"
+        )
+
+    def rebuild(self):
+        self.clear_items()
+        self.add_item(PlayerSelect(self))
+        self.add_item(SearchButton(self))
+        if self.search_query:
+            self.add_item(ClearSearchButton(self))
+        if self.total_pages() > 1:
+            self.add_item(PrevPageButton(self))
+            self.add_item(NextPageButton(self))
+        self.add_item(ConfirmButton(self))
+
 
 # ------------------- MOD SEÇME MENÜSÜ -------------------
 class ModSelect(Select):
@@ -37,75 +257,13 @@ class ModSelect(Select):
         secilen_mod = self.values[0]
         kisi_sayisi = int(secilen_mod[0]) * 2
 
-        view = View(timeout=None)
-        player_select = PlayerSelect(kisi_sayisi, secilen_mod, interaction.guild)
-        view.add_item(player_select)
-
-        onay_butonu = Button(label="✅ Takım Oluştur!", style=discord.ButtonStyle.green)
-        view.add_item(onay_butonu)
-
-        view.kisi_sayisi = kisi_sayisi
-        view.secilen_mod = secilen_mod
-
-        async def buton_callback(interaction_buton: discord.Interaction):
-            secilen_idler = player_select.values
-            # ID'leri isimlere çevir
-            secilen_isimler = []
-            for uid in secilen_idler:
-                member = interaction.guild.get_member(int(uid))
-                if member:
-                    secilen_isimler.append(member.display_name)
-                else:
-                    secilen_isimler.append(uid)
-
-            if not secilen_isimler:
-                await interaction_buton.response.send_message("❌ Hiç oyuncu seçmedin!", ephemeral=True)
-                return
-            if len(secilen_isimler) != view.kisi_sayisi:
-                await interaction_buton.response.send_message(f"❌ {view.kisi_sayisi} kişi seçmelisin! Sen {len(secilen_isimler)} kişi seçtin.", ephemeral=True)
-                return
-
-            rastgele_liste = secilen_isimler.copy()
-            random.shuffle(rastgele_liste)
-            yari = len(rastgele_liste) // 2
-            takim1 = rastgele_liste[:yari]
-            takim2 = rastgele_liste[yari:]
-
-            embed = discord.Embed(title=f"🎮 {view.secilen_mod} Takımlar Oluştu!", color=discord.Color.blue())
-            embed.add_field(name="🟦 Takım 1", value="\n".join(takim1) if takim1 else "Boş", inline=True)
-            embed.add_field(name="🟥 Takım 2", value="\n".join(takim2) if takim2 else "Boş", inline=True)
-            embed.set_footer(text="İyi oyunlar! 🎯")
-
-            await interaction_buton.response.edit_message(content="", embed=embed, view=None)
-
-        onay_butonu.callback = buton_callback
+        view = TeamBuilderView(kisi_sayisi, secilen_mod, interaction.guild)
 
         await interaction.response.edit_message(
-            content=f"**{secilen_mod}** seçtin. Lütfen tam **{kisi_sayisi}** oyuncu seç ve 'Takım Oluştur' butonuna bas.",
-            view=view
+            content=view.build_content(),
+            view=view,
         )
 
-# ------------------- OYUNCU SEÇME MENÜSÜ (Sunucudan Alır) -------------------
-class PlayerSelect(Select):
-    def __init__(self, kisi_sayisi, mod_adi, guild):
-        options = []
-        for member in guild.members:
-            if not member.bot:
-                options.append(discord.SelectOption(
-                    label=member.display_name,
-                    value=str(member.id)
-                ))
-        # Discord max 25 seçenek gösterir, ilk 25'ini al
-        options = options[:25]
-        super().__init__(
-            placeholder=f"{kisi_sayisi} oyuncu seç...",
-            min_values=1,
-            max_values=kisi_sayisi,
-            options=options
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
 
 # ------------------- ANA KOMUT /belirle -------------------
 @bot.tree.command(name="belirle", description="LOL takım oluşturma aracı")
@@ -113,6 +271,7 @@ async def belirle(interaction: discord.Interaction):
     view = View(timeout=None)
     view.add_item(ModSelect())
     await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
+
 
 # ------------------- RENDER WEB SUNUCUSU -------------------
 class Handler(BaseHTTPRequestHandler):
