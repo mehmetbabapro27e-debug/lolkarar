@@ -89,10 +89,16 @@ class PlayerSelect(Select):
         if not options:
             options = [discord.SelectOption(label="Listelenecek oyuncu yok", value="none")]
 
+        if options[0].value == "none":
+            max_values = 1
+        else:
+            # Bir seferde mod için gereken kişi sayısından fazlası seçilemesin
+            max_values = min(len(options), parent_view.kisi_sayisi)
+
         super().__init__(
             placeholder=f"Oyuncu seç... (Sayfa {parent_view.current_page + 1}/{parent_view.total_pages()})",
             min_values=0,
-            max_values=len(options) if options[0].value != "none" else 1,
+            max_values=max_values,
             options=options,
             disabled=options[0].value == "none"
         )
