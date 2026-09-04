@@ -26,6 +26,14 @@ bot = MyBot()
 PAGE_SIZE = 25  # Discord bir select menüde en fazla 25 seçenek gösterebiliyor
 
 
+def normalize_str(text: str) -> str:
+    """Türkçe karakterleri ve büyük/küçük harfleri standart formata getirir."""
+    if not text:
+        return ""
+    replacements = str.maketrans({"İ": "i", "I": "ı", "Ş": "ş", "Ğ": "ğ", "Ü": "ü", "Ö": "ö", "Ç": "ç"})
+    return text.translate(replacements).lower()
+
+
 # ------------------- ARAMA MODALI -------------------
 class SearchModal(Modal, title="Oyuncu Ara"):
     arama = TextInput(
@@ -40,13 +48,18 @@ class SearchModal(Modal, title="Oyuncu Ara"):
         self.parent_view = parent_view
 
     async def on_submit(self, interaction: discord.Interaction):
-        query = self.arama.value.strip().lower()
-        self.parent_view.search_query = query
+        query = normalize_str(self.arama.value.strip())
+        self.parent_view.search_query = self.arama.value.strip()
 
         if query:
+            def matches(member: discord.Member) -> bool:
+                display_name = normalize_str(member.display_name)
+                username = normalize_str(member.name)
+                global_name = normalize_str(member.global_name) if member.global_name else ""
+                return query in display_name or query in username or query in global_name
+
             self.parent_view.filtered_members = [
-                m for m in self.parent_view.all_members
-                if query in m.display_name.lower()
+                m for m in self.parent_view.all_members if matches(m)
             ]
         else:
             self.parent_view.filtered_members = self.parent_view.all_members
@@ -67,25 +80,25 @@ class PlayerSelect(Select):
         options = []
         for member in page_members:
             options.append(discord.SelectOption(
-                label=member.display_name,
+                label=member.display_name[:100],
+                description=f"@{member.name}"[:100],
                 value=str(member.id),
                 default=str(member.id) in parent_view.selected_ids,
             ))
 
         if not options:
-            options = [discord.SelectOption(label="Bu sayfada/aramada oyuncu yok", value="none")]
+            options = [discord.SelectOption(label="Bu aramayla eşleşen oyuncu bulunamadı", value="none")]
 
         super().__init__(
             placeholder=f"Oyuncu seç... (Sayfa {parent_view.current_page + 1}/{parent_view.total_pages()})",
             min_values=0,
-            max_values=len(options),
+            max_values=len(options) if options[0].value != "none" else 1,
             options=options,
+            disabled=options[0].value == "none"
         )
         self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
-        # Bu sayfada gösterilen eski seçimleri sil, yerine yeni seçilenleri ekle.
-        # (Diğer sayfalardaki seçimler selected_ids içinde dokunulmadan kalır.)
         page_ids = {opt.value for opt in self.options if opt.value != "none"}
         self.parent_view.selected_ids -= page_ids
         for val in self.values:
@@ -230,6 +243,11 @@ class TeamBuilderView(View):
         )
 
     def rebuild(self):
+        # Sayfa numarasını sınırların dışına çıkmayacak şekilde ayarla
+        max_page = self.total_pages() - 1
+        if self.current_page > max_page:
+            self.current_page = max_page
+
         self.clear_items()
         self.add_item(PlayerSelect(self))
         self.add_item(SearchButton(self))
