@@ -44,7 +44,8 @@ class ModSelect(Select):
         secilen_mod = self.values[0]
         kisi_sayisi = int(secilen_mod[0]) * 2
 
-        view = View()
+        # 🔥 ZAMAN AŞIMINI KALDIR (15 dakika boyunca açık kalır)
+        view = View(timeout=None)
         player_select = PlayerSelect(kisi_sayisi, secilen_mod)
         view.add_item(player_select)
 
@@ -103,14 +104,12 @@ class PlayerSelect(Select):
 # ------------------- ANA KOMUT /belirle -------------------
 @bot.tree.command(name="belirle", description="LOL takım oluşturma aracı")
 async def belirle(interaction: discord.Interaction):
-    view = View()
+    # 🔥 ZAMAN AŞIMINI KALDIR (15 dakika boyunca açık kalır)
+    view = View(timeout=None)
     view.add_item(ModSelect())
     await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
 
-# ------------------- BOTU ÇALIŞTIR -------------------
-# ... (diğer kodlar burada)
-
-# Render'ın "Live" görmesi için basit bir web sunucusu
+# ------------------- RENDER'IN "LIVE" GÖRMESİ İÇİN WEB SUNUCUSU -------------------
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -125,4 +124,3 @@ threading.Thread(target=run_web, daemon=True).start()
 
 # ------------------- BOTU ÇALIŞTIR -------------------
 bot.run(os.getenv("BOT_TOKEN"))
-
