@@ -37,20 +37,19 @@ class ModSelect(Select):
         secilen_mod = self.values[0]
         kisi_sayisi = int(secilen_mod[0]) * 2
         
-        # Oyuncu seçme menüsünü göster
+        # Sunucudaki tüm üyeler (botlar hariç)
+        uyeler = [m for m in interaction.guild.members if not m.bot]
+        
         view = View(timeout=None)
-        # Arama butonu
+        
+        # Arama Butonu
         arama_butonu = Button(label="🔍 İsim Ara", style=discord.ButtonStyle.primary)
         view.add_item(arama_butonu)
         
-        # Sunucudaki tüm üyeleri al (botlar hariç)
-        uyeler = [m for m in interaction.guild.members if not m.bot]
-        
-        # Sayfalama için PlayerSelectView'i oluştur
+        # Sayfalı Liste
         player_view = PlayerSelectView(uyeler, kisi_sayisi, secilen_mod, 0)
         view.add_item(player_view)
         
-        # Butona tıklanınca arama modal'ı aç
         async def arama_callback(interaction_buton: discord.Interaction):
             modal = SearchModal(uyeler, kisi_sayisi, secilen_mod)
             await interaction_buton.response.send_modal(modal)
@@ -62,16 +61,15 @@ class ModSelect(Select):
             view=view
         )
 
-# ------------------- OYUNCU SEÇME (Sayfalar ile) -------------------
+# ------------------- SAYFALI OYUNCU LİSTESİ -------------------
 class PlayerSelectView(Select):
     def __init__(self, uyeler, kisi_sayisi, mod_adi, sayfa):
         self.uyeler = uyeler
         self.kisi_sayisi = kisi_sayisi
         self.mod_adi = mod_adi
         self.sayfa = sayfa
-        self.sayfa_boyutu = 15  # Her sayfada 15 kişi
+        self.sayfa_boyutu = 15
         
-        # Sayfadaki üyeleri al
         baslangic = sayfa * self.sayfa_boyutu
         bitis = baslangic + self.sayfa_boyutu
         sayfadaki_uyeler = uyeler[baslangic:bitis]
@@ -83,19 +81,20 @@ class PlayerSelectView(Select):
                 value=str(member.id)
             ))
         
+        toplam_sayfa = (len(uyeler) - 1) // self.sayfa_boyutu + 1
         super().__init__(
-            placeholder=f"Sayfa {sayfa+1}/{(len(uyeler)-1)//self.sayfa_boyutu + 1} - {len(sayfadaki_uyeler)} kişi",
+            placeholder=f"Sayfa {sayfa+1}/{toplam_sayfa} - {len(sayfadaki_uyeler)} kişi",
             min_values=1,
             max_values=kisi_sayisi,
             options=options
         )
+        self.view = None
     
     async def callback(self, interaction: discord.Interaction):
-        # Seçilenleri saklamak için view'e ekle
         self.view.secilenler = self.values
         await interaction.response.defer()
 
-# ------------------- ARAMA MODAL'ı -------------------
+# ------------------- ARAMA MODAL'ı (DÜZELTİLDİ) -------------------
 class SearchModal(Modal, title="🔍 Oyuncu Ara"):
     def __init__(self, uyeler, kisi_sayisi, mod_adi):
         super().__init__()
@@ -112,9 +111,12 @@ class SearchModal(Modal, title="🔍 Oyuncu Ara"):
         self.add_item(self.arama_kutusu)
     
     async def on_submit(self, interaction: discord.Interaction):
-        arama = self.arama_kutusu.value.lower()
+        arama = self.arama_kutusu.value.lower().strip()
+        if not arama:
+            await interaction.response.send_message("❌ Lütfen bir isim girin.", ephemeral=True)
+            return
         
-        # Arama yap
+        # Arama yap (içerenleri bul)
         eslesenler = []
         for member in self.uyeler:
             if arama in member.display_name.lower() or arama in member.name.lower():
@@ -124,46 +126,45 @@ class SearchModal(Modal, title="🔍 Oyuncu Ara"):
             await interaction.response.send_message(f"❌ '{self.arama_kutusu.value}' ile eşleşen üye bulunamadı.", ephemeral=True)
             return
         
-        # Sonuçları göster
+        # Sonuçları göster (max 25)
+        eslesenler = eslesenler[:25]
+        
         view = View(timeout=None)
-        # Sonuçları Select menüsüne koy
+        view.secilenler = []  # Seçilenleri saklamak için
+        
         options = []
-        for member in eslesenler[:25]:  # Discord limiti
+        for member in eslesenler:
             options.append(discord.SelectOption(
                 label=member.display_name[:50],
                 value=str(member.id)
             ))
         
-        secim = Select(
-            placeholder=f"Bulunan {len(eslesenler)} kişiden seç ({self.kisi_sayisi} kişi)",
+        secim_menu = Select(
+            placeholder=f"Bulunan {len(eslesenler)} kişiden seç (en fazla {self.kisi_sayisi})",
             min_values=1,
             max_values=self.kisi_sayisi,
             options=options
         )
         
-        # Seçilenleri sakla
-        secilenler = []
-        
         async def secim_callback(interaction_sel: discord.Interaction):
-            nonlocal secilenler
-            secilenler = secim.values
+            view.secilenler = secim_menu.values
             await interaction_sel.response.defer()
         
-        secim.callback = secim_callback
+        secim_menu.callback = secim_callback
         
         onay_butonu = Button(label="✅ Takım Oluştur!", style=discord.ButtonStyle.green)
         
         async def buton_callback(interaction_buton: discord.Interaction):
-            if not secilenler:
+            if not view.secilenler:
                 await interaction_buton.response.send_message("❌ Hiç oyuncu seçmedin!", ephemeral=True)
                 return
-            if len(secilenler) != self.kisi_sayisi:
-                await interaction_buton.response.send_message(f"❌ {self.kisi_sayisi} kişi seçmelisin! Sen {len(secilenler)} kişi seçtin.", ephemeral=True)
+            if len(view.secilenler) != self.kisi_sayisi:
+                await interaction_buton.response.send_message(f"❌ {self.kisi_sayisi} kişi seçmelisin! Sen {len(view.secilenler)} kişi seçtin.", ephemeral=True)
                 return
             
             # İsimlere çevir
             secilen_isimler = []
-            for uid in secilenler:
+            for uid in view.secilenler:
                 member = interaction.guild.get_member(int(uid))
                 if member:
                     secilen_isimler.append(member.display_name)
@@ -184,7 +185,7 @@ class SearchModal(Modal, title="🔍 Oyuncu Ara"):
         
         onay_butonu.callback = buton_callback
         
-        view.add_item(secim)
+        view.add_item(secim_menu)
         view.add_item(onay_butonu)
         
         await interaction.response.send_message(
