@@ -87,7 +87,7 @@ class PlayerSelect(Select):
             ))
 
         if not options:
-            options = [discord.SelectOption(label="Bu aramayla eşleşen oyuncu bulunamadı", value="none")]
+            options = [discord.SelectOption(label="Bu aramayla/rolde oyuncu bulunamadı", value="none")]
 
         super().__init__(
             placeholder=f"Oyuncu seç... (Sayfa {parent_view.current_page + 1}/{parent_view.total_pages()})",
@@ -211,13 +211,13 @@ class ConfirmButton(Button):
 
 # ------------------- ANA SAYFALI SEÇİM VIEW'İ -------------------
 class TeamBuilderView(View):
-    def __init__(self, kisi_sayisi, mod_adi, guild):
+    def __init__(self, kisi_sayisi, mod_adi, guild, target_members):
         super().__init__(timeout=None)
         self.kisi_sayisi = kisi_sayisi
         self.secilen_mod = mod_adi
         self.guild = guild
 
-        self.all_members = [m for m in guild.members if not m.bot]
+        self.all_members = target_members
         self.filtered_members = self.all_members
         self.search_query = ""
         self.current_page = 0
@@ -243,7 +243,6 @@ class TeamBuilderView(View):
         )
 
     def rebuild(self):
-        # Sayfa numarasını sınırların dışına çıkmayacak şekilde ayarla
         max_page = self.total_pages() - 1
         if self.current_page > max_page:
             self.current_page = max_page
@@ -261,7 +260,7 @@ class TeamBuilderView(View):
 
 # ------------------- MOD SEÇME MENÜSÜ -------------------
 class ModSelect(Select):
-    def __init__(self):
+    def __init__(self, target_members):
         options = [
             discord.SelectOption(label="1v1", description="1 kişiye karşı 1 kişi", emoji="⚔️"),
             discord.SelectOption(label="2v2", description="2 kişiye karşı 2 kişi", emoji="⚔️"),
@@ -270,12 +269,13 @@ class ModSelect(Select):
             discord.SelectOption(label="5v5", description="5 kişiye karşı 5 kişi", emoji="⚔️"),
         ]
         super().__init__(placeholder="Mod seç...", min_values=1, max_values=1, options=options)
+        self.target_members = target_members
 
     async def callback(self, interaction: discord.Interaction):
         secilen_mod = self.values[0]
         kisi_sayisi = int(secilen_mod[0]) * 2
 
-        view = TeamBuilderView(kisi_sayisi, secilen_mod, interaction.guild)
+        view = TeamBuilderView(kisi_sayisi, secilen_mod, interaction.guild, self.target_members)
 
         await interaction.response.edit_message(
             content=view.build_content(),
@@ -285,10 +285,23 @@ class ModSelect(Select):
 
 # ------------------- ANA KOMUT /belirle -------------------
 @bot.tree.command(name="belirle", description="LOL takım oluşturma aracı")
-async def belirle(interaction: discord.Interaction):
+@app_commands.describe(rol="Listelenecek oyuncuların sahip olması gereken rol (İsteğe bağlı)")
+async def belirle(interaction: discord.Interaction, rol: discord.Role = None):
+    if rol:
+        target_members = [m for m in rol.members if not m.bot]
+    else:
+        target_members = [m for m in interaction.guild.members if not m.bot]
+
+    if not target_members:
+        rol_adi = f"**{rol.name}**" if rol else "Sunucuda"
+        await interaction.response.send_message(f"❌ {rol_adi} rolüne sahip hiç oyuncu bulunamadı!", ephemeral=True)
+        return
+
     view = View(timeout=None)
-    view.add_item(ModSelect())
-    await interaction.response.send_message("**🏆 Hangi modda oynanacak?** Aşağıdan seç.", view=view, ephemeral=False)
+    view.add_item(ModSelect(target_members))
+
+    rol_bilgisi = f" (**{rol.name}** rolündekiler: {len(target_members)} kişi)" if rol else ""
+    await interaction.response.send_message(f"**🏆 Hangi modda oynanacak?**{rol_bilgisi}\nAşağıdan seç.", view=view, ephemeral=False)
 
 
 # ------------------- RENDER WEB SUNUCUSU -------------------
